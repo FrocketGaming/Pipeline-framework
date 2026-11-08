@@ -11,6 +11,7 @@ rows are ever pulled into this process.
 
 from __future__ import annotations
 
+import re
 import threading
 import time
 from collections.abc import Callable, Mapping
@@ -55,6 +56,39 @@ def format_bytes(count: int) -> str:
     return f"{size:.2f} TiB"
 
 
+_CREATE_TABLE = re.compile(
+    r"CREATE\s+(?:OR\s+REPLACE\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(`[^`]+`|[\w.-]+)",
+    re.IGNORECASE,
+)
+
+
+def _created_tables(job: Job) -> set[str]:
+    """Table names this job creates, parsed from ``CREATE ... TABLE`` targets."""
+    names: set[str] = set()
+    for step in job.steps:
+        try:
+            text = step.file.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for match in _CREATE_TABLE.finditer(text):
+            names.add(match.group(1).strip("`").split(".")[-1])
+    return names
+
+
+def _missing_name(exc: BaseException) -> tuple[str, str] | None:
+    """Return ``(kind, name)`` for BigQuery "Not found: Table/Dataset ..." errors."""
+    text = str(exc)
+    for kind, pattern in (
+        ("table", r"Not found: Table\s+(\S+)"),
+        ("dataset", r"Not found: Dataset\s+(\S+)"),
+    ):
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            name = match.group(1).strip("`").split(".")[-1].split(":")[-1]
+            return kind, name
+    return None
+
+
 @dataclass
 class StepResult:
     job: str
@@ -65,6 +99,7 @@ class StepResult:
     bytes_processed: int
     rows: int | None
     duration: float
+    note: str | None = None
 
 
 @dataclass
@@ -110,10 +145,11 @@ class JobReport:
         lines = [f"{self.job}  run {self.run_id}  ({self.progress} steps)"]
         for result in self.results:
             detail = result.statement_type or ""
+            note = f"  ({result.note})" if result.note else ""
             lines.append(
                 f"  {result.step:<16} {result.state:<8} "
                 f"{format_bytes(result.bytes_processed):>10} "
-                f"{result.duration:>6.1f}s  {result.job_id or ''}  {detail}"
+                f"{result.duration:>6.1f}s  {result.job_id or ''}  {detail}{note}"
             )
         if self.error:
             lines.append(f"  ERROR: {self.error}")
@@ -223,19 +259,42 @@ def run_job(
             f"job '{job.name}' has no dataset; set 'dataset' in job.toml or pass --dataset"
         )
 
+    dry_run = bool(getattr(runner, "dry_run", False))
+    outputs = _created_tables(job) if dry_run else set()
     run_id = run_id or time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
     report = JobReport(job=job.name, run_id=run_id, planned_steps=len(job.steps))
 
     def run_step(step) -> StepResult:
         started = time.perf_counter()
-        result = runner.execute(
-            step.sql(context),
-            timeout=step.timeout,
-            parameters=parameters or {},
-            max_bytes_billed=step.max_bytes,
-            # Recorded as the status-table label, when one is configured.
-            job_name=f"{job.name}.{step.name}",
-        )
+        try:
+            result = runner.execute(
+                step.sql(context),
+                timeout=step.timeout,
+                parameters=parameters or {},
+                max_bytes_billed=step.max_bytes,
+                # Recorded as the status-table label, when one is configured.
+                job_name=f"{job.name}.{step.name}",
+            )
+        except Exception as exc:
+            if dry_run:
+                note = _dry_run_skip_reason(exc, outputs)
+                if note is not None:
+                    record = StepResult(
+                        job=job.name,
+                        step=step.name,
+                        state="SKIPPED",
+                        job_id=None,
+                        statement_type=None,
+                        bytes_processed=0,
+                        rows=None,
+                        duration=time.perf_counter() - started,
+                        note=note,
+                    )
+                    if on_step is not None:
+                        on_step(record)
+                    return record
+            raise
+
         record = StepResult(
             job=job.name,
             step=step.name,
@@ -288,6 +347,25 @@ def run_job(
                     raise failure from exc
 
     return report
+
+
+def _dry_run_skip_reason(exc: BaseException, job_outputs: set[str]) -> str | None:
+    """Why a dry-run failure should be skipped rather than failed, or None.
+
+    A dry run executes nothing, so a step that reads a table its own job creates
+    (or a dataset that does not exist yet) reports "not found". That is an
+    expected condition on a fresh dataset, not a bug: report it as a skip with
+    a reason. Any other "not found" — a typo'd table, for example — still fails.
+    """
+    missing = _missing_name(exc)
+    if missing is None:
+        return None
+    kind, name = missing
+    if kind == "dataset":
+        return f"dataset '{name}' does not exist yet"
+    if name in job_outputs:
+        return f"reads table '{name}', which this job creates but has not been built"
+    return None
 
 
 def run_jobs(

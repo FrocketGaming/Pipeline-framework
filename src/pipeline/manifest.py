@@ -136,6 +136,8 @@ class Job:
             raise ManifestError(f"{job_path.name}: unknown key(s) {sorted(unknown)}")
         if not raw.get("step"):
             raise ManifestError(f"{job_path.name}: no [[step]] entries")
+        if not isinstance(raw.get("step"), list):
+            raise ManifestError(f"{job_path.name}: 'step' must be an array of tables")
 
         root = job_path.parent
         steps: list[Step] = []
@@ -150,12 +152,30 @@ class Job:
                 raise ManifestError(
                     f"{job_path.name} step #{index}: 'name' and 'file' are required"
                 )
+
+            depends_on = entry.get("depends_on", [])
+            if isinstance(depends_on, str):
+                raise ManifestError(
+                    f"{job_path.name} step #{index}: 'depends_on' must be a list of step "
+                    f"names, not a string (got {depends_on!r})"
+                )
+            if not isinstance(depends_on, list) or not all(
+                isinstance(dep, str) for dep in depends_on
+            ):
+                raise ManifestError(
+                    f"{job_path.name} step #{index}: 'depends_on' must be a list of strings"
+                )
+
+            timeout = entry.get("timeout")
+            if timeout is not None and (isinstance(timeout, bool) or not isinstance(timeout, int)):
+                raise ManifestError(f"{job_path.name} step #{index}: 'timeout' must be an integer")
+
             steps.append(
                 Step(
                     name=str(name),
                     file=root / str(filename),
-                    depends_on=tuple(entry.get("depends_on", ())),
-                    timeout=entry.get("timeout"),
+                    depends_on=tuple(depends_on),
+                    timeout=timeout,
                     max_bytes=(parse_bytes(entry["max_bytes"]) if "max_bytes" in entry else None),
                 )
             )
