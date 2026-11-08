@@ -7,8 +7,10 @@ A job is a directory::
         queries/01_stg_orders.sql
 
 ``job.toml`` names the steps and their dependencies; each SQL file holds one
-statement. Nothing here imports Google Cloud, so jobs can be listed, validated
-and planned without credentials.
+statement. ``project`` and ``dataset`` are the job's default targets, substituted
+into ``{{ project }}`` / ``{{ dataset }}``; the CLI flags of the same name
+override them per run. Nothing here imports Google Cloud, so jobs can be listed,
+validated and planned without credentials.
 """
 
 from __future__ import annotations
@@ -54,7 +56,7 @@ _UNITS = {
 }
 
 _STEP_KEYS = {"name", "file", "depends_on", "timeout", "max_bytes"}
-_JOB_KEYS = {"dataset", "max_workers", "step"}
+_JOB_KEYS = {"project", "dataset", "max_workers", "step"}
 
 
 def parse_bytes(value: int | str) -> int:
@@ -116,6 +118,7 @@ class Job:
     name: str
     root: Path
     steps: tuple[Step, ...]
+    project: str = ""
     dataset: str = ""
     max_workers: int = 4
 
@@ -138,6 +141,10 @@ class Job:
             raise ManifestError(f"{job_path.name}: no [[step]] entries")
         if not isinstance(raw.get("step"), list):
             raise ManifestError(f"{job_path.name}: 'step' must be an array of tables")
+
+        for key in ("project", "dataset"):
+            if not isinstance(raw.get(key, ""), str):
+                raise ManifestError(f"{job_path.name}: '{key}' must be a string")
 
         root = job_path.parent
         steps: list[Step] = []
@@ -184,7 +191,8 @@ class Job:
             name=root.name,
             root=root,
             steps=tuple(steps),
-            dataset=str(raw.get("dataset", "")),
+            project=raw.get("project", ""),
+            dataset=raw.get("dataset", ""),
             max_workers=max(1, int(raw.get("max_workers", 4))),
         )
         job._validate()
@@ -276,6 +284,7 @@ class Job:
             name=self.name,
             root=self.root,
             steps=tuple(steps),
+            project=self.project,
             dataset=self.dataset,
             max_workers=self.max_workers,
         )

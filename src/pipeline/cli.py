@@ -185,10 +185,21 @@ def run(
 
     from zbq import BigQueryHandler
 
+    # --project wins; otherwise every selected job must agree on one, so a run
+    # never silently bills one project for tables in another.
+    declared = {job.project for job in jobs if job.project}
+    if not project:
+        if len(declared) > 1:
+            raise _fail(
+                "selected jobs target different projects "
+                f"({', '.join(sorted(declared))}); run them separately or pass --project"
+            )
+        project = next(iter(declared), "")
+
     client = BigQueryHandler(project_id=project, status_table=status_table or None)
     project = project or client.project_id
     if not project:
-        raise _fail("no project; pass --project or set GOOGLE_CLOUD_PROJECT")
+        raise _fail("no project; set 'project' in job.toml or pass --project")
 
     if step:
         typer.echo(f"running {len(jobs[0].steps)} step(s) of {jobs[0].name}", err=False)
