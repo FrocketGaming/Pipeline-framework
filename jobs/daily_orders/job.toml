@@ -1,0 +1,18 @@
+dataset = "zbq_demo"
+
+[[step]]
+name = "stg_orders"
+file = "queries/01_stg_orders.sql"
+timeout = 900
+max_bytes = "50GiB"
+
+[[step]]
+name = "stg_users"
+file = "queries/02_stg_users.sql"
+timeout = 900
+max_bytes = "10GiB"
+
+[[step]]
+name = "fact_orders"
+file = "queries/03_fact_orders.sql"
+depends_on = ["stg_orders", "stg_users"]

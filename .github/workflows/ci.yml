@@ -1,0 +1,36 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install
+        run: uv sync --frozen
+
+      - name: Format
+        run: uv run ruff format --check .
+
+      - name: Lint Python
+        run: uv run ruff check .
+
+      - name: Lint SQL
+        run: uv run sqlfluff lint jobs
+
+      - name: Test
+        run: uv run pytest
+
+      # Every job.toml parses, every dependency resolves, every SQL file exists.
+      # No credentials needed, so this runs on forks too.
+      - name: Validate jobs
+        run: uv run pipeline validate

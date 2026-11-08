@@ -1,0 +1,9 @@
+[sqlfluff]
+dialect = bigquery
+templater = jinja
+
+# The runner fills these in; give the linter the same shape so `{{ project }}`
+# renders as a plain identifier instead of failing to template.
+[sqlfluff:templater:jinja:context]
+project = "p"
+dataset = "d"

@@ -1,0 +1,11 @@
+dataset = "zbq_demo"
+
+[[step]]
+name = "order_items"
+file = "queries/01_order_items.sql"
+max_bytes = "50GiB"
+
+[[step]]
+name = "finance_daily"
+file = "queries/02_finance_daily.sql"
+depends_on = ["order_items"]
