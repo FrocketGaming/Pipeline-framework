@@ -24,15 +24,35 @@ pipeline/
 ## Commands
 
 ```bash
-uv run pipeline list                 # jobs and their step counts
-uv run pipeline validate             # check every job.toml, no BigQuery needed
-uv run pipeline plan daily_orders    # show the execution levels
-uv run pipeline run --job daily_orders --var run_date=2024-01-01
-uv run pipeline run --job daily_orders --job finance_sync     # both, concurrently
-uv run pipeline run --all --max-jobs 2
+pipeline list                        # jobs and their step counts
+pipeline validate                    # check every job.toml, no BigQuery needed
+pipeline plan daily_orders           # show the execution levels
+pipeline run --job daily_orders --var run_date=2024-01-01
+pipeline run --job daily_orders --job finance_sync     # both, concurrently
+pipeline run --all --max-jobs 2
+
+# testing one query at a time, against a scratch dataset
+pipeline run --job daily_orders --step stg_orders --dataset scratch --var run_date=2024-01-01
+pipeline run --job daily_orders --step fact_orders --with-deps
 ```
 
 Exit codes: `0` all jobs succeeded, `1` any job failed, `2` bad manifest or usage.
+
+## Testing a single step
+
+`--step` narrows a job to the steps you name, so you can iterate on one query
+without re-running the whole job. By default the step runs alone — its
+`depends_on` entries are dropped, which assumes the upstream tables already
+exist. Add `--with-deps` to run the named steps and everything they depend on.
+
+```bash
+pipeline plan daily_orders                              # names available to --step
+pipeline run --job daily_orders --step stg_orders       # just this query
+pipeline run --job daily_orders --step fact_orders --with-deps
+```
+
+`--step` requires exactly one `--job`. Pair it with `--dataset` to point at a
+scratch dataset so test runs never touch production tables.
 
 ## job.toml
 
