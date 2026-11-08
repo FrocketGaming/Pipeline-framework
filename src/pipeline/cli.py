@@ -45,6 +45,13 @@ def _load(name: str, jobs_dir: Path) -> Job:
         raise _fail(str(exc)) from exc
 
 
+def _discover(jobs_dir: Path) -> dict[str, Path]:
+    try:
+        return discover(jobs_dir)
+    except JobError as exc:
+        raise _fail(str(exc)) from exc
+
+
 def _parse_vars(pairs: list[str]) -> dict[str, str]:
     values: dict[str, str] = {}
     for pair in pairs:
@@ -57,11 +64,13 @@ def _parse_vars(pairs: list[str]) -> dict[str, str]:
 
 def _print_step(result: StepResult) -> None:
     with _PRINT_LOCK:
-        print(
+        line = (
             f"  {result.job}/{result.step:<14} {result.state:<8} "
-            f"{format_bytes(result.bytes_processed):>10} {result.duration:>6.1f}s",
-            flush=True,
+            f"{format_bytes(result.bytes_processed):>10} {result.duration:>6.1f}s"
         )
+        if result.note:
+            line += f"  {result.note}"
+        print(line, flush=True)
 
 
 def _print_job(report: JobReport) -> None:
@@ -75,7 +84,7 @@ def _print_job(report: JobReport) -> None:
 @app.command("list")
 def list_jobs(ctx: typer.Context) -> None:
     """List jobs and their step counts."""
-    for name, path in sorted(discover(ctx.obj).items()):
+    for name, path in sorted(_discover(ctx.obj).items()):
         try:
             job = Job.load(path)
         except JobError as exc:
@@ -90,7 +99,7 @@ def validate(
     job: list[str] | None = typer.Argument(None, help="Jobs to check (default: all)."),
 ) -> None:
     """Check every job.toml without touching BigQuery."""
-    names = job or sorted(discover(ctx.obj))
+    names = job or sorted(_discover(ctx.obj))
     failed = 0
     for name in names:
         try:
@@ -147,9 +156,16 @@ def run(
     ),
 ) -> None:
     """Run one or more jobs, or just a few of their steps."""
+    if job and all_jobs:
+        raise _fail("--job and --all are mutually exclusive")
+    if step and all_jobs:
+        raise _fail("--step cannot be used with --all")
+    if with_deps and not step:
+        raise _fail("--with-deps requires --step")
+
     names = sorted(set(job or []))
     if all_jobs:
-        names = sorted(discover(ctx.obj))
+        names = sorted(_discover(ctx.obj))
     if not names:
         raise _fail("pass --job NAME (repeatable) or --all")
     if step and len(names) != 1:
