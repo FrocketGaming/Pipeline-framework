@@ -1,8 +1,9 @@
 """Execution: run one job's levels, or several jobs at once.
 
 The runner is deliberately decoupled from Google Cloud. It only needs an object
-with an ``execute(...)`` method (``zbq.BigQueryHandler`` provides one), which
-keeps every branch below testable without credentials.
+with ``execute(...)`` (and, for ``dry_run`` mode, ``dry_run(...)``) —
+``zbq.BigQueryHandler`` provides both, which keeps every branch below testable
+without credentials.
 
 Each step is one ``client.execute()`` call — never ``read()`` — so no result
 rows are ever pulled into this process.
@@ -67,6 +68,17 @@ class StepResult:
 
 
 @dataclass
+class _DryRunOutcome:
+    """Adapts ``zbq``'s DryRunResult to the shape ``run_job`` expects."""
+
+    statement_type: str | None
+    total_bytes_processed: int
+    state: str = "DRY_RUN"
+    job_id: str | None = None
+    num_dml_affected_rows: int | None = None
+
+
+@dataclass
 class JobReport:
     job: str
     run_id: str
@@ -89,7 +101,7 @@ class JobReport:
     @property
     def progress(self) -> str:
         """Steps that succeeded, e.g. ``1/3`` when the job's size is known."""
-        done = sum(1 for result in self.results if result.state == "DONE")
+        done = sum(1 for result in self.results if result.state in ("DONE", "DRY_RUN"))
         if self.planned_steps:
             return f"{done}/{self.planned_steps}"
         return str(done)
@@ -111,6 +123,7 @@ class JobReport:
 @dataclass
 class BatchReport:
     reports: list[JobReport] = field(default_factory=list)
+    dry_run: bool = False
 
     @property
     def ok(self) -> bool:
@@ -120,9 +133,14 @@ class BatchReport:
     def failed(self) -> list[str]:
         return [report.job for report in self.reports if not report.ok]
 
+    @property
+    def total_bytes(self) -> int:
+        return sum(report.total_bytes for report in self.reports)
+
     def summary(self) -> str:
         width = max([len(report.job) for report in self.reports] + [3])
-        lines = [f"{'job'.ljust(width)}  {'status':<6}  {'steps':>7}  {'scanned':>10}  {'sec':>6}"]
+        amount = "estimated" if self.dry_run else "scanned"
+        lines = [f"{'job'.ljust(width)}  {'status':<6}  {'steps':>7}  {amount:>10}  {'sec':>6}"]
         for report in self.reports:
             lines.append(
                 f"{report.job.ljust(width)}  "
@@ -134,6 +152,7 @@ class BatchReport:
         succeeded = sum(1 for report in self.reports if report.ok)
         lines.append("")
         lines.append(f"{succeeded}/{len(self.reports)} jobs succeeded")
+        lines.append(f"total {amount} {format_bytes(self.total_bytes)}")
 
         failures = [report for report in self.reports if not report.ok]
         if failures:
@@ -150,11 +169,16 @@ class JobRunner:
     ``zbq`` clients are cheap to reuse and safe across threads; the semaphore is
     what stops N jobs x M parallel steps from bursting into the concurrent-job
     quota.
+
+    With ``dry_run=True`` every step is validated by BigQuery instead of run:
+    no bytes are billed and nothing is written, but the same SQL and parameters
+    are used, so syntax, table and column errors still surface.
     """
 
-    def __init__(self, client: Any, *, max_concurrency: int = 8):
+    def __init__(self, client: Any, *, max_concurrency: int = 8, dry_run: bool = False):
         self._client = client
         self._semaphore = threading.BoundedSemaphore(max(1, max_concurrency))
+        self.dry_run = dry_run
 
     def execute(
         self,
@@ -166,6 +190,12 @@ class JobRunner:
         job_name: str | None = None,
     ):
         with self._semaphore:
+            if self.dry_run:
+                preview = self._client.dry_run(sql, parameters=dict(parameters or {}))
+                return _DryRunOutcome(
+                    statement_type=preview.statement_type,
+                    total_bytes_processed=preview.total_bytes_processed or 0,
+                )
             return self._client.execute(
                 sql,
                 timeout=timeout,
@@ -209,7 +239,7 @@ def run_job(
         record = StepResult(
             job=job.name,
             step=step.name,
-            state="DONE",
+            state=getattr(result, "state", "DONE"),
             job_id=result.job_id,
             statement_type=result.statement_type,
             bytes_processed=result.total_bytes_processed or 0,
@@ -277,7 +307,7 @@ def run_jobs(
     One job failing never stops the others: each gets its own report, and the
     batch is ``ok`` only if every job succeeded.
     """
-    batch = BatchReport()
+    batch = BatchReport(dry_run=bool(getattr(runner, "dry_run", False)))
     if not jobs:
         return batch
 

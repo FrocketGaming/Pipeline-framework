@@ -129,6 +129,9 @@ def run(
     with_deps: bool = typer.Option(
         False, "--with-deps", help="With --step, also run the steps they depend on."
     ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Validate every step and report bytes; write nothing."
+    ),
     project: str = typer.Option("", "--project", help="GCP project (default: ADC project)."),
     dataset: str = typer.Option("", "--dataset", help="Override every job's dataset."),
     var: list[str] | None = typer.Option(
@@ -174,9 +177,10 @@ def run(
     if step:
         typer.echo(f"running {len(jobs[0].steps)} step(s) of {jobs[0].name}", err=False)
 
-    runner = JobRunner(client, max_concurrency=max_concurrency)
+    runner = JobRunner(client, max_concurrency=max_concurrency, dry_run=dry_run)
+    mode = "dry run" if dry_run else f"{len(jobs)} job(s)"
     print(
-        f"{len(jobs)} job(s)  project={project}  dataset={dataset or 'per job'}",
+        f"{mode}  project={project}  dataset={dataset or 'per job'}",
         flush=True,
     )
 
