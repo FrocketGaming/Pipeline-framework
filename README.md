@@ -64,6 +64,7 @@ The directory name is the job id: `jobs/daily_orders` is run with
 `pipeline run --job daily_orders`.
 
 ```toml
+project = "my-project"     # optional; overridden by --project
 dataset = "analytics"      # required unless you pass --dataset
 
 [[step]]
