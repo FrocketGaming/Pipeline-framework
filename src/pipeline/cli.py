@@ -77,7 +77,9 @@ def _print_step(result: StepResult) -> None:
 def _print_job(report: JobReport) -> None:
     with _PRINT_LOCK:
         status = "ok" if report.ok else "FAILED"
-        print(f"  {report.job}: {status} ({len(report.results)} steps)", flush=True)
+        print(f"  {report.job}: {status} ({report.progress} steps)", flush=True)
+        if not report.ok:
+            print(f"    {report.error}", flush=True)
 
 
 def _list(args: argparse.Namespace) -> int:

@@ -158,3 +158,30 @@ class TestRunJobs:
 
     def test_empty_batch_is_ok(self):
         assert run_jobs([], FakeClient(), project="p").ok
+
+    def test_summary_points_at_the_failing_job_step_and_file(self, tmp_path):
+        broken = make_job(tmp_path, "broken", steps=(("a", ()), ("b", ())))
+        batch = run_jobs([broken], FakeClient(fail_on={"broken.b"}), project="p", max_workers=1)
+
+        text = batch.summary()
+        assert "broken" in text
+        assert "FAILED" in text
+        assert "1/2" in text  # one of two steps ran
+        assert "step 'b'" in text
+        assert "b.sql" in text
+        assert "boom" in text
+
+
+class TestFailureDetail:
+    def test_report_names_the_step_file_and_error(self, tmp_path):
+        client = FakeClient(fail_on={"demo.b"})
+        job = make_job(tmp_path, steps=(("a", ()), ("b", ())))
+        with pytest.raises(StepFailed) as excinfo:
+            run_job(job, client, project="p", max_workers=1)
+
+        report = excinfo.value.report
+        assert report is not None
+        assert report.progress == "1/2"
+        assert "step 'b'" in report.error
+        assert "b.sql" in report.error
+        assert "boom" in report.error
