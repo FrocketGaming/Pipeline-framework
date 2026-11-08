@@ -72,6 +72,7 @@ class JobReport:
     run_id: str
     results: list[StepResult] = field(default_factory=list)
     error: str | None = None
+    planned_steps: int = 0
 
     @property
     def ok(self) -> bool:
@@ -85,8 +86,16 @@ class JobReport:
     def total_duration(self) -> float:
         return sum(result.duration for result in self.results)
 
+    @property
+    def progress(self) -> str:
+        """Steps that succeeded, e.g. ``1/3`` when the job's size is known."""
+        done = sum(1 for result in self.results if result.state == "DONE")
+        if self.planned_steps:
+            return f"{done}/{self.planned_steps}"
+        return str(done)
+
     def summary(self) -> str:
-        lines = [f"{self.job}  run {self.run_id}"]
+        lines = [f"{self.job}  run {self.run_id}  ({self.progress} steps)"]
         for result in self.results:
             detail = result.statement_type or ""
             lines.append(
@@ -113,18 +122,25 @@ class BatchReport:
 
     def summary(self) -> str:
         width = max([len(report.job) for report in self.reports] + [3])
-        lines = [f"{'job'.ljust(width)}  {'status':<6}  {'steps':>5}  {'scanned':>10}  {'sec':>6}"]
+        lines = [f"{'job'.ljust(width)}  {'status':<6}  {'steps':>7}  {'scanned':>10}  {'sec':>6}"]
         for report in self.reports:
             lines.append(
                 f"{report.job.ljust(width)}  "
                 f"{'ok' if report.ok else 'FAILED':<6}  "
-                f"{len(report.results):>5}  "
+                f"{report.progress:>7}  "
                 f"{format_bytes(report.total_bytes):>10}  "
                 f"{report.total_duration:>6.1f}"
             )
         succeeded = sum(1 for report in self.reports if report.ok)
         lines.append("")
         lines.append(f"{succeeded}/{len(self.reports)} jobs succeeded")
+
+        failures = [report for report in self.reports if not report.ok]
+        if failures:
+            lines.append("")
+            lines.append("failures:")
+            for report in failures:
+                lines.append(f"  {report.job}: {report.error}")
         return "\n".join(lines)
 
 
@@ -178,7 +194,7 @@ def run_job(
         )
 
     run_id = run_id or time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
-    report = JobReport(job=job.name, run_id=run_id)
+    report = JobReport(job=job.name, run_id=run_id, planned_steps=len(job.steps))
 
     def run_step(step) -> StepResult:
         started = time.perf_counter()
@@ -217,7 +233,9 @@ def run_job(
                     # blocking and exposes no cancel handle.
                     for pending in futures:
                         pending.cancel()
-                    report.error = f"step '{step.name}' failed: {exc}"
+                    # Name the file as well as the step: one SQL file per step,
+                    # so this is the thing to open when a run fails.
+                    report.error = f"step '{step.name}' ({step.file.name}) failed: {exc}"
                     report.results.append(
                         StepResult(
                             job=job.name,
@@ -282,9 +300,19 @@ def run_jobs(
             try:
                 report = future.result()
             except StepFailed as exc:
-                report = exc.report or JobReport(job=job.name, run_id="-", error=str(exc))
+                report = exc.report or JobReport(
+                    job=job.name,
+                    run_id="-",
+                    error=str(exc),
+                    planned_steps=len(job.steps),
+                )
             except Exception as exc:  # noqa: BLE001 - one job must not abort the batch
-                report = JobReport(job=job.name, run_id="-", error=f"{type(exc).__name__}: {exc}")
+                report = JobReport(
+                    job=job.name,
+                    run_id="-",
+                    error=f"{type(exc).__name__}: {exc}",
+                    planned_steps=len(job.steps),
+                )
             batch.reports.append(report)
             if on_job is not None:
                 on_job(report)
