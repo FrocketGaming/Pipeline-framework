@@ -4,13 +4,10 @@ version = "0.1.0"
 description = "Job runner for zbq BigQuery SQL pipelines"
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = ["zbq"]
+dependencies = ["zbq>=2.2.4"]
 
 [project.scripts]
 pipeline = "pipeline.cli:main"
-
-[tool.uv.sources]
-zbq = { path = "../zbq", editable = true }
 
 [build-system]
 requires = ["hatchling"]

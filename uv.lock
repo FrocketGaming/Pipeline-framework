@@ -863,7 +863,7 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "zbq", editable = "../zbq" }]
+requires-dist = [{ name = "zbq", specifier = ">=2.2.4" }]
 
 [package.metadata.requires-dev]
 dev = [
@@ -1366,44 +1366,19 @@ wheels = [
 
 [[package]]
 name = "zbq"
-version = "2.3.0"
-source = { editable = "../zbq" }
+version = "2.2.4"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "google-cloud-bigquery" },
     { name = "google-cloud-bigquery-storage" },
     { name = "google-cloud-storage" },
+    { name = "grpcio" },
     { name = "loguru" },
     { name = "polars" },
     { name = "pyarrow" },
     { name = "tqdm" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "google-cloud-bigquery", specifier = ">=3.34.0" },
-    { name = "google-cloud-bigquery-datatransfer", marker = "extra == 'scheduling'", specifier = ">=3.24.0" },
-    { name = "google-cloud-bigquery-datatransfer", marker = "extra == 'test'", specifier = ">=3.24.0" },
-    { name = "google-cloud-bigquery-storage", specifier = ">=2.32.0" },
-    { name = "google-cloud-storage", specifier = ">=3.1.1" },
-    { name = "loguru", specifier = ">=0.7.0" },
-    { name = "numpy", marker = "extra == 'test'", specifier = ">=1.26" },
-    { name = "pandas", marker = "extra == 'pandas'", specifier = ">=2.0" },
-    { name = "polars", specifier = ">=1.0" },
-    { name = "pyarrow", specifier = ">=10.0.0" },
-    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.4.1" },
-    { name = "pytest-cov", marker = "extra == 'test'", specifier = ">=6.2.1" },
-    { name = "pytest-mock", marker = "extra == 'test'", specifier = ">=3.14.1" },
-    { name = "ruff", marker = "extra == 'test'", specifier = ">=0.9.0" },
-    { name = "tqdm", specifier = ">=4.67.1" },
-]
-provides-extras = ["pandas", "scheduling", "test"]
-
-[package.metadata.requires-dev]
-test = [
-    { name = "google-cloud-bigquery-datatransfer", specifier = ">=3.24.0" },
-    { name = "numpy", specifier = ">=1.26" },
-    { name = "pytest", specifier = ">=8.4.1" },
-    { name = "pytest-cov", specifier = ">=6.2.1" },
-    { name = "pytest-mock", specifier = ">=3.14.1" },
-    { name = "ruff", specifier = ">=0.9.0" },
+sdist = { url = "https://files.pythonhosted.org/packages/e5/dc/3a6129f3b9ba87110f2a1da78c818a524b044dfdf5e8534b1569a084cee7/zbq-2.2.4.tar.gz", hash = "sha256:96db146e1ac0c83afbe9a6bc697d8d7b4efec24ba8ef5293d571b2383315e91e", size = 132874, upload-time = "2026-10-30T15:47:43.129Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/68/d0/da7a051e731d0d7339a9204c43e4f0049fae1ea3f357109bbaa86cace395/zbq-2.2.4-py3-none-any.whl", hash = "sha256:f98674104c3429d5efe3498be5c5eb4a698ad9df279093ffe22136e0429e132f", size = 60055, upload-time = "2026-10-30T15:47:41.721Z" },
 ]
