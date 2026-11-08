@@ -31,7 +31,11 @@ pipeline run --job daily_orders --var run_date=2024-01-01
 pipeline run --job daily_orders --job finance_sync     # both, concurrently
 pipeline run --all --max-jobs 2
 
-# testing one query at a time, against a scratch dataset
+# validate without writing anything: BigQuery checks the SQL, nothing is billed
+pipeline run --job daily_orders --dry-run
+pipeline run --job daily_orders --step fact_orders --dry-run
+
+# or actually build into a scratch dataset
 pipeline run --job daily_orders --step stg_orders --dataset scratch --var run_date=2024-01-01
 pipeline run --job daily_orders --step fact_orders --with-deps
 ```
