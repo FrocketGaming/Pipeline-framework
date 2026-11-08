@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-import argparse
 import os
 import sys
 import threading
+from pathlib import Path
+
+import typer
 
 from .manifest import Job, JobError, discover, load_job
 from .runner import JobReport, JobRunner, StepResult, format_bytes, run_jobs
@@ -13,56 +15,44 @@ from .runner import JobReport, JobRunner, StepResult, format_bytes, run_jobs
 DEFAULT_JOBS_DIR = os.environ.get("PIPELINE_JOBS_DIR", "jobs")
 _PRINT_LOCK = threading.Lock()
 
+app = typer.Typer(
+    add_completion=False,
+    no_args_is_help=True,
+    help="Run SQL jobs against BigQuery.",
+)
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="pipeline", description="Run SQL jobs against BigQuery.")
-    parser.add_argument(
-        "--jobs-dir", default=DEFAULT_JOBS_DIR, help="directory holding jobs (default: jobs)"
-    )
-    sub = parser.add_subparsers(dest="command", required=True)
 
-    sub.add_parser("list", help="list jobs")
+@app.callback()
+def _configure(
+    ctx: typer.Context,
+    jobs_dir: Path = typer.Option(
+        Path(DEFAULT_JOBS_DIR), "--jobs-dir", help="directory holding jobs."
+    ),
+) -> None:
+    """Options shared by every command."""
+    ctx.obj = jobs_dir
 
-    validate = sub.add_parser("validate", help="check manifests without touching BigQuery")
-    validate.add_argument("job", nargs="*")
 
-    plan = sub.add_parser("plan", help="show a job's execution levels")
-    plan.add_argument("job")
+def _fail(message: str, code: int = 2) -> typer.Exit:
+    typer.secho(f"error: {message}", fg=typer.colors.RED, err=True)
+    return typer.Exit(code=code)
 
-    run = sub.add_parser("run", help="run one or more jobs")
-    run.add_argument(
-        "--job",
-        "--job_name",
-        dest="job",
-        action="append",
-        default=[],
-        metavar="NAME",
-        help="job to run (repeatable)",
-    )
-    run.add_argument("--all", action="store_true", help="run every job")
-    run.add_argument("--project", default="", help="GCP project (default: the ADC project)")
-    run.add_argument("--dataset", default="", help="override every job's dataset")
-    run.add_argument(
-        "--var",
-        action="append",
-        default=[],
-        metavar="k=v",
-        help="query parameter shared by every step (repeatable)",
-    )
-    run.add_argument("--max-jobs", type=int, default=4, help="jobs at once (default 4)")
-    run.add_argument("--max-workers", type=int, default=None, help="parallel steps per job")
-    run.add_argument(
-        "--max-concurrency",
-        type=int,
-        default=8,
-        help="cap on in-flight BigQuery jobs (default 8)",
-    )
-    run.add_argument(
-        "--status-table",
-        default="",
-        help="append one zbq status row per step here, e.g. proj.dataset.runs",
-    )
-    return parser
+
+def _load(name: str, jobs_dir: Path) -> Job:
+    try:
+        return load_job(name, jobs_dir)
+    except JobError as exc:
+        raise _fail(str(exc)) from exc
+
+
+def _parse_vars(pairs: list[str]) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for pair in pairs:
+        if "=" not in pair:
+            raise JobError(f"--var expects k=v, got {pair!r}")
+        key, value = pair.split("=", 1)
+        values[key.strip()] = value
+    return values
 
 
 def _print_step(result: StepResult) -> None:
@@ -82,76 +72,111 @@ def _print_job(report: JobReport) -> None:
             print(f"    {report.error}", flush=True)
 
 
-def _list(args: argparse.Namespace) -> int:
-    for name, path in sorted(discover(args.jobs_dir).items()):
+@app.command("list")
+def list_jobs(ctx: typer.Context) -> None:
+    """List jobs and their step counts."""
+    for name, path in sorted(discover(ctx.obj).items()):
         try:
             job = Job.load(path)
-            print(f"{name:<24} {len(job.steps):>2} steps  dataset={job.dataset or '-'}")
         except JobError as exc:
-            print(f"{name:<24} INVALID  {exc}")
-    return 0
+            typer.echo(f"{name:<24} INVALID  {exc}")
+            continue
+        typer.echo(f"{name:<24} {len(job.steps):>2} steps  dataset={job.dataset or '-'}")
 
 
-def _validate(args: argparse.Namespace) -> int:
-    names = args.job or sorted(discover(args.jobs_dir))
+@app.command()
+def validate(
+    ctx: typer.Context,
+    job: list[str] | None = typer.Argument(None, help="Jobs to check (default: all)."),
+) -> None:
+    """Check every job.toml without touching BigQuery."""
+    names = job or sorted(discover(ctx.obj))
     failed = 0
     for name in names:
         try:
-            job = load_job(name, args.jobs_dir)
-            print(f"{name}: ok ({len(job.steps)} steps, {len(job.levels())} levels)")
+            loaded = load_job(name, ctx.obj)
         except JobError as exc:
             failed += 1
-            print(f"{name}: INVALID - {exc}")
-    return 1 if failed else 0
+            typer.echo(f"{name}: INVALID - {exc}")
+            continue
+        typer.echo(f"{name}: ok ({len(loaded.steps)} steps, {len(loaded.levels())} levels)")
+    if failed:
+        raise typer.Exit(code=1)
 
 
-def _plan(args: argparse.Namespace) -> int:
-    job = load_job(args.job, args.jobs_dir)
-    print(f"{job.name}  dataset={job.dataset or '-'}")
-    for depth, level in enumerate(job.levels(), start=1):
-        print(f"  level {depth}")
+@app.command()
+def plan(ctx: typer.Context, job: str = typer.Argument(..., help="Job to inspect.")) -> None:
+    """Show a job's execution levels."""
+    loaded = _load(job, ctx.obj)
+    typer.echo(f"{loaded.name}  dataset={loaded.dataset or '-'}")
+    for depth, level in enumerate(loaded.levels(), start=1):
+        typer.echo(f"  level {depth}")
         for step in level:
             depends = f"  <- {', '.join(step.depends_on)}" if step.depends_on else ""
-            print(f"    {step.name:<16} {step.file.name}{depends}")
-    return 0
+            typer.echo(f"    {step.name:<16} {step.file.name}{depends}")
 
 
-def _parse_vars(pairs: list[str]) -> dict[str, str]:
-    values: dict[str, str] = {}
-    for pair in pairs:
-        if "=" not in pair:
-            raise JobError(f"--var expects k=v, got {pair!r}")
-        key, value = pair.split("=", 1)
-        values[key.strip()] = value
-    return values
-
-
-def _run(args: argparse.Namespace) -> int:
-    names = sorted(set(args.job))
-    if args.all:
-        names = sorted(discover(args.jobs_dir))
+@app.command()
+def run(
+    ctx: typer.Context,
+    job: list[str] | None = typer.Option(
+        None, "--job", "--job-name", "-j", help="Job to run (repeatable)."
+    ),
+    all_jobs: bool = typer.Option(False, "--all", help="Run every job."),
+    step: list[str] | None = typer.Option(
+        None, "--step", "-s", help="Run only these steps of one job (repeatable)."
+    ),
+    with_deps: bool = typer.Option(
+        False, "--with-deps", help="With --step, also run the steps they depend on."
+    ),
+    project: str = typer.Option("", "--project", help="GCP project (default: ADC project)."),
+    dataset: str = typer.Option("", "--dataset", help="Override every job's dataset."),
+    var: list[str] | None = typer.Option(
+        None, "--var", help="Query parameter as k=v (repeatable)."
+    ),
+    max_jobs: int = typer.Option(4, "--max-jobs", help="Jobs running at once."),
+    max_workers: int | None = typer.Option(None, "--max-workers", help="Parallel steps per job."),
+    max_concurrency: int = typer.Option(
+        8, "--max-concurrency", help="Cap on in-flight BigQuery jobs."
+    ),
+    status_table: str = typer.Option(
+        "", "--status-table", help="Append one zbq status row per step here."
+    ),
+) -> None:
+    """Run one or more jobs, or just a few of their steps."""
+    names = sorted(set(job or []))
+    if all_jobs:
+        names = sorted(discover(ctx.obj))
     if not names:
-        print("error: pass --job NAME (repeatable) or --all", file=sys.stderr)
-        return 2
+        raise _fail("pass --job NAME (repeatable) or --all")
+    if step and len(names) != 1:
+        raise _fail("--step requires exactly one --job")
 
-    # Validate every manifest before touching BigQuery.
-    jobs = [load_job(name, args.jobs_dir) for name in names]
-    parameters = _parse_vars(args.var)
+    jobs = [_load(name, ctx.obj) for name in names]
+    if step:
+        try:
+            jobs = [jobs[0].subset(step, with_dependencies=with_deps)]
+        except JobError as exc:
+            raise _fail(str(exc)) from exc
+
+    try:
+        parameters = _parse_vars(var or [])
+    except JobError as exc:
+        raise _fail(str(exc)) from exc
 
     from zbq import BigQueryHandler
 
-    client = BigQueryHandler(
-        project_id=args.project,
-        status_table=args.status_table or None,
-    )
-    project = args.project or client.project_id
+    client = BigQueryHandler(project_id=project, status_table=status_table or None)
+    project = project or client.project_id
     if not project:
-        print("error: no project; pass --project or set GOOGLE_CLOUD_PROJECT", file=sys.stderr)
-        return 2
+        raise _fail("no project; pass --project or set GOOGLE_CLOUD_PROJECT")
 
-    runner = JobRunner(client, max_concurrency=args.max_concurrency)
+    if step:
+        typer.echo(f"running {len(jobs[0].steps)} step(s) of {jobs[0].name}", err=False)
+
+    runner = JobRunner(client, max_concurrency=max_concurrency)
     print(
-        f"{len(jobs)} job(s)  project={project}  dataset={args.dataset or 'per job'}",
+        f"{len(jobs)} job(s)  project={project}  dataset={dataset or 'per job'}",
         flush=True,
     )
 
@@ -159,29 +184,28 @@ def _run(args: argparse.Namespace) -> int:
         jobs,
         runner,
         project=project,
-        dataset=args.dataset,
+        dataset=dataset,
         parameters=parameters,
-        max_jobs=args.max_jobs,
-        max_workers=args.max_workers,
+        max_jobs=max_jobs,
+        max_workers=max_workers,
         on_step=_print_step,
         on_job=_print_job,
     )
 
-    print()
-    print(batch.summary())
-    return 0 if batch.ok else 1
+    typer.echo()
+    typer.echo(batch.summary())
+    if not batch.ok:
+        raise typer.Exit(code=1)
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    """Programmatic entry point; prefer the ``pipeline`` console script."""
     try:
-        if args.command == "list":
-            return _list(args)
-        if args.command == "validate":
-            return _validate(args)
-        if args.command == "plan":
-            return _plan(args)
-        return _run(args)
-    except JobError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 2
+        app(argv, standalone_mode=True)
+    except SystemExit as exc:  # typer/click exits through SystemExit
+        return int(exc.code or 0)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

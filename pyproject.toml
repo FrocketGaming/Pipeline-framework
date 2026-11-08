@@ -4,10 +4,10 @@ version = "0.1.0"
 description = "Job runner for zbq BigQuery SQL pipelines"
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = ["zbq>=2.2.4"]
+dependencies = ["zbq>=2.2.4", "typer>=0.12"]
 
 [project.scripts]
-pipeline = "pipeline.cli:main"
+pipeline = "pipeline.cli:app"
 
 [build-system]
 requires = ["hatchling"]
@@ -26,3 +26,7 @@ addopts = ["-q", "--strict-markers"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+
+# typer.Option/Argument in defaults is the documented Typer idiom.
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["typer.Option", "typer.Argument"]

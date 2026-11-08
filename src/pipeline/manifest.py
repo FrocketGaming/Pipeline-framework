@@ -220,6 +220,46 @@ class Job:
                 pending.pop(step.name)
         return levels
 
+    def subset(self, names: list[str] | tuple[str, ...], *, with_dependencies: bool = False) -> Job:
+        """Copy of this job containing only *names*.
+
+        Dependencies outside the selection are dropped, so a subset of steps
+        runs as its own small DAG — which is what makes single-step testing
+        work. With ``with_dependencies`` the ancestors come along.
+        """
+        known = {step.name: step for step in self.steps}
+        unknown = [name for name in names if name not in known]
+        if unknown:
+            raise ManifestError(f"unknown step(s): {', '.join(unknown)} (have: {', '.join(known)})")
+
+        selected = set(names)
+        if with_dependencies:
+            pending = list(selected)
+            while pending:
+                for dependency in known[pending.pop()].depends_on:
+                    if dependency not in selected:
+                        selected.add(dependency)
+                        pending.append(dependency)
+
+        steps = [
+            Step(
+                name=step.name,
+                file=step.file,
+                depends_on=tuple(d for d in step.depends_on if d in selected),
+                timeout=step.timeout,
+                max_bytes=step.max_bytes,
+            )
+            for step in self.steps
+            if step.name in selected
+        ]
+        return Job(
+            name=self.name,
+            root=self.root,
+            steps=tuple(steps),
+            dataset=self.dataset,
+            max_workers=self.max_workers,
+        )
+
 
 def discover(jobs_dir: str | Path = "jobs") -> dict[str, Path]:
     """Map job name -> ``job.toml`` path for every job under *jobs_dir*."""
