@@ -42,6 +42,17 @@ pipeline run --job daily_orders --step fact_orders --with-deps
 
 Exit codes: `0` all jobs succeeded, `1` any job failed, `2` bad manifest or usage.
 
+## Local checks before pushing
+
+CI runs on every PR, and the same five checks can run before you push:
+
+```bash
+git config core.hooksPath .githooks    # once per clone
+```
+
+`.githooks/pre-push` then blocks a push when format, lint, sqlfluff, tests or
+`pipeline validate` fails. Skip a single push with `git push --no-verify`.
+
 ## Testing a single step
 
 `--step` narrows a job to the steps you name, so you can iterate on one query
